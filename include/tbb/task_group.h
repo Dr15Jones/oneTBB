@@ -189,6 +189,8 @@ public:
 
 } // namespace internal
 
+class task_group_run_handle;
+
 class task_group : public internal::task_group_base {
 public:
     task_group () : task_group_base( task_group_context::concurrent_wait ) {}
@@ -214,6 +216,8 @@ public:
     }
 #endif
 
+    task_group_run_handle make_run_handle();
+
     template<typename F>
     task_group_status run_and_wait( const F& f ) {
         return internal_run_and_wait<const F>( f );
@@ -225,7 +229,79 @@ public:
         h.mark_scheduled();
         return internal_run_and_wait< task_handle<F> >( h );
     }
+private:
+    friend class task_group_run_handle;
+    void increment() {
+      my_root->increment_ref_count();
+    }
+    void decrement() {
+      my_root->decrement_ref_count();
+    }
+
 }; // class task_group
+
+ class task_group_run_handle {
+ private:
+    friend class task_group;
+
+    task_group_run_handle(task_group* group) : group_(group) {
+      group_->increment();
+    }
+    task_group* group_;
+ public:
+    task_group_run_handle(task_group_run_handle const& iOther):
+    group_(iOther.group_) {
+      if(group_) {
+        group_->increment();
+      }
+    }
+
+    task_group_run_handle(task_group_run_handle&& iOther):
+    group_(iOther.group_) {
+      iOther.group_ = nullptr;
+    }
+
+    task_group_run_handle& operator=(task_group_run_handle const& iOther) {
+      if(iOther.group_) { iOther.group_->increment(); }
+      if(group_) {group_->decrement();}
+      group_ = iOther.group_;
+      return *this;
+    }
+
+    task_group_run_handle& operator=(task_group_run_handle&& iOther) {
+      if(group_) { group_->decrement();}
+      group_ = iOther.group_;
+      iOther.group_ = nullptr;
+      return *this;
+    }
+
+    ~task_group_run_handle() {
+      release();
+    }
+
+    void release() {
+      if(group_) {
+        group_->decrement();
+      }
+    }
+    
+#if __TBB_CPP11_RVALUE_REF_PRESENT
+    template<typename F>
+      void run( F&& f ) {
+      group_->run(std::forward<F>(f));
+    }
+#else
+    template<typename F>
+      void run(const F& f) {
+      group_->run(f);
+    }
+#endif
+    
+ };
+
+task_group_run_handle task_group::make_run_handle() {
+  return task_group_run_handle(this);
+}
 
 class __TBB_DEPRECATED structured_task_group : public internal::task_group_base {
 public:
